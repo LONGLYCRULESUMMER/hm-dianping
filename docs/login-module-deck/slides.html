@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>黑马点评 · 登录模块（企业化改造版）</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    fontFamily: '"PingFang SC","Source Han Sans CN",sans-serif'
+  });
+</script>
+</head>
+<body>
+
+<!-- Slide 1: 封面 -->
+<section class="slide cover">
+  <h1>黑马点评 · 登录模块</h1>
+  <h2>从 Toy 实现到企业化改造</h2>
+  <div class="badges">
+    <span>Spring Boot 2.7</span>
+    <span>Redis</span>
+    <span>StringRedisTemplate</span>
+    <span>Jackson</span>
+    <span>双拦截器</span>
+    <span>SHA-256</span>
+  </div>
+</section>
+
+<!-- Slide 2: 模块全景 -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">模块全景</h2><span class="slide-num">02 / 11</span>
+  </div>
+  <div class="slide-body">
+    <pre class="mermaid">
+flowchart LR
+  C[Client / 前端] -->|HTTP| N[Nginx]
+  N --> A[Spring Boot 应用]
+  A -->|读写 token / 验证码 / 防刷计数| R[(Redis)]
+  A -->|查/建用户| M[(MySQL)]
+  A -.->|发送| S[SmsClient<br/>默认 LogSmsClient]
+
+  subgraph A
+    direction TB
+    F1[RefreshTokenInterceptor<br/>所有请求]
+    F2[LoginInterceptor<br/>受保护路径]
+    UC[UserController]
+    US[UserServiceImpl]
+    LS[LoginSecurityService]
+    F1 --> F2 --> UC --> US --> LS
+  end
+    </pre>
+  </div>
+</section>
+
+<!-- Slide 3: Toy 味问题 -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">原版本的 6 个 "Toy 味" 问题</h2><span class="slide-num">03 / 11</span>
+  </div>
+  <div class="slide-body">
+    <ol>
+      <li><span class="bad">①</span> 同手机号可<strong>无限刷验证码</strong>（无 60s 间隔，无日上限）—— 一夜烧光短信费</li>
+      <li><span class="bad">②</span> 验证码<strong>明文存 Redis</strong> —— Redis 一旦泄露 = 验证码全裸</li>
+      <li><span class="bad">③</span> 验证码<strong>错误次数不限</strong> —— 6 位数字暴力枚举可破</li>
+      <li><span class="bad">④</span> 短信发送<strong>写死成 log.debug</strong> —— 永远接不上真实服务商</li>
+      <li><span class="bad">⑤</span> Token 续期<strong>每次请求都写 Redis</strong> —— 写放大，热 key 风险</li>
+      <li><span class="bad">⑥</span> 用户信息用 <strong>Hash 存</strong>，字段全转 String —— 类型丢失，DTO 还得手动转</li>
+    </ol>
+    <div class="callout">这 6 个点，企业里任何一个都会被 review 打回。</div>
+  </div>
+</section>
+
+<!-- Slide 4: 演进 -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">方案演进：Session → Redis Token</h2><span class="slide-num">04 / 11</span>
+  </div>
+  <div class="slide-body">
+    <pre class="mermaid">
+flowchart LR
+  subgraph V1[① 单机 Session]
+    C1[Client] --> T1[Tomcat<br/>HttpSession]
+  end
+  subgraph V2[② 多实例 Session 复制]
+    C2[Client] --> LB2[LB] --> T2A[Tomcat A]
+    LB2 --> T2B[Tomcat B]
+    T2A <-.复制成本高.-> T2B
+  end
+  subgraph V3[③ Redis 集中存储]
+    C3[Client] --> LB3[LB] --> T3A[Tomcat A]
+    LB3 --> T3B[Tomcat B]
+    T3A --> R[(Redis<br/>token→user)]
+    T3B --> R
+  end
+    </pre>
+    <p style="margin-top:8mm">
+      <span class="bad">①</span> 单点不可扩；
+      <span class="bad">②</span> 复制带宽 + 一致性都难；
+      <span class="good">③</span> 状态外置 Redis，无状态应用，水平扩展无压力。
+    </p>
+  </div>
+</section>
+
+<!-- Slide 5: 主流程时序图 -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">主流程时序图（改造后）</h2><span class="slide-num">05 / 11</span>
+  </div>
+  <div class="slide-body">
+    <pre class="mermaid">
+sequenceDiagram
+  participant U as 用户
+  participant A as Spring Boot
+  participant SEC as LoginSecurityService
+  participant R as Redis
+  participant DB as MySQL
+  participant SMS as SmsClient
+
+  U->>A: POST /user/code (phone)
+  A->>SEC: 锁定/冷却/日上限 检查
+  SEC->>R: hasKey(lock/cooldown/count)
+  R-->>SEC: 状态
+  SEC-->>A: ok
+  A->>SEC: storeCode + 标记冷却 + 计数+1
+  SEC->>R: SET hash(code) EX 120; SETEX cooldown; INCR count
+  A->>SMS: send(phone, code)
+  A-->>U: 200
+
+  U->>A: POST /user/login (phone, code)
+  A->>SEC: 锁定检查 + verifyCode
+  SEC->>R: GET stored_hash
+  SEC->>SEC: hash(input)==stored?
+  alt 失败
+    SEC->>R: INCR fail; 达阈值则 SET lock
+    SEC-->>A: false
+    A-->>U: 验证码错误
+  else 成功
+    SEC->>R: DEL code, fail
+    A->>DB: 查/建用户
+    A->>R: SET token JSON EX 1800
+    A-->>U: token
+  end
+    </pre>
+  </div>
+</section>
+
+<!-- Slide 6: 安全层 ① -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">安全层 ①：防刷 + 哈希 + 锁定</h2><span class="slide-num">06 / 11</span>
+  </div>
+  <div class="slide-body">
+    <div class="two-col">
+      <div>
+        <h3 style="color:#58a6ff">三道闸门</h3>
+        <ul>
+          <li><strong>冷却</strong>：60s 内重复发同号 → 拒绝</li>
+          <li><strong>日上限</strong>：单号每日 10 次 → 拒绝</li>
+          <li><strong>锁定</strong>：连错 5 次 → 锁 10 分钟，期间发码/登录都拒</li>
+        </ul>
+        <h3 style="color:#58a6ff;margin-top:10mm">哈希存储</h3>
+        <p>Redis 存 <code>SHA-256(phone + code + salt)</code>，盐通过 <code>hmdp.login.code-salt</code> 配置。</p>
+        <p>就算 Redis 被脱库，攻击者也拿不到原始 code。</p>
+      </div>
+      <div>
+        <pre class="mermaid">
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Cooldown: 发码
+  Cooldown --> Idle: 60s 后
+  Idle --> Verifying: 用户提交
+  Verifying --> Idle: 成功(清失败计数)
+  Verifying --> Failed: 失败 fail+1
+  Failed --> Idle: fail < 5
+  Failed --> Locked: fail ≥ 5
+  Locked --> Idle: 10min 后自动解锁
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Slide 7: 安全层 ② SmsClient -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">安全层 ②：SmsClient 抽象</h2><span class="slide-num">07 / 11</span>
+  </div>
+  <div class="slide-body">
+    <div class="two-col">
+      <div>
+        <h3 style="color:#58a6ff">为什么要抽象</h3>
+        <ul>
+          <li>原版直接 <code>log.debug</code>，永远上不了生产</li>
+          <li>不同环境需要不同实现：日志 / 阿里云 / 腾讯云 / 自研网关</li>
+          <li>测试态可注入 Mock，记录调用</li>
+        </ul>
+        <h3 style="color:#58a6ff;margin-top:10mm">实现替换方式</h3>
+        <p>新增 <code>AliyunSmsClient implements SmsClient</code>，加 <code>@Primary</code> 或 <code>@ConditionalOnProperty</code> 即可，<strong>UserServiceImpl 零改动</strong>。</p>
+      </div>
+      <div>
+        <pre class="mermaid">
+classDiagram
+  class SmsClient {
+    <<interface>>
+    +sendVerificationCode(phone, code)
+  }
+  class LogSmsClient {
+    +sendVerificationCode(phone, code)
+  }
+  class AliyunSmsClient {
+    +sendVerificationCode(phone, code)
+  }
+  class UserServiceImpl {
+    -SmsClient smsClient
+  }
+  SmsClient <|.. LogSmsClient
+  SmsClient <|.. AliyunSmsClient
+  UserServiceImpl --> SmsClient
+        </pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Slide 8: 会话改造 ① JSON vs Hash -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">会话改造 ①：JSON 替代 Hash</h2><span class="slide-num">08 / 11</span>
+  </div>
+  <div class="slide-body">
+    <table>
+      <tr><th></th><th>Hash（原版）</th><th>JSON String（改造后）</th></tr>
+      <tr><td>读写命令</td><td>HSET / HGETALL，多 field</td><td>SET / GET，一次完成</td></tr>
+      <tr><td>类型保真</td><td class="bad">所有值转 String，Long → "123"</td><td class="good">Jackson 反序列化还原</td></tr>
+      <tr><td>反序列化代码量</td><td>BeanUtil.fillBeanWithMap，依赖反射猜类型</td><td>objectMapper.readValue，类型明确</td></tr>
+      <tr><td>部分字段更新</td><td class="good">支持 HSET 单字段</td><td class="bad">需要整体 GET → 改 → SET</td></tr>
+      <tr><td>调试可读性</td><td>HGETALL 多字段</td><td class="good">GET 一行 JSON 一目了然</td></tr>
+    </table>
+    <div class="callout">
+      <strong>取舍：</strong>登录态字段总量小（id/nickName/icon），<strong>整体读写</strong>是常态，没有"只改一个字段"的场景。JSON 更合适。
+    </div>
+  </div>
+</section>
+
+<!-- Slide 9: 会话改造 ② 滑窗续期 -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">会话改造 ②：滑窗续期</h2><span class="slide-num">09 / 11</span>
+  </div>
+  <div class="slide-body">
+    <div class="two-col">
+      <div>
+        <h3 style="color:#58a6ff">原版问题</h3>
+        <p>每次请求 → <code>EXPIRE</code> 一次。活跃用户每秒 N 个请求 = 每秒 N 次 Redis 写。</p>
+        <h3 style="color:#58a6ff;margin-top:8mm">改造</h3>
+        <p>读 token 后先 <code>TTL</code>，仅当剩余 &lt; 阈值（默认 600s）才 <code>EXPIRE</code>。</p>
+        <pre><code>Long ttl = redis.getExpire(key, SECONDS);
+if (ttl &gt; 0 &amp;&amp; ttl &lt; props.getRefreshThresholdSeconds()) {
+    redis.expire(key, props.getTokenTtlSeconds(), SECONDS);
+}</code></pre>
+      </div>
+      <div>
+        <pre class="mermaid">
+gantt
+  title Token 续期对比（30 分钟 TTL）
+  dateFormat  X
+  axisFormat  %s
+  section 原版（每请求都续）
+  Req1 写: 0, 1
+  Req2 写: 5, 1
+  Req3 写: 10, 1
+  Req4 写: 15, 1
+  Req5 写: 20, 1
+  Req6 写: 25, 1
+  section 改造（仅临近过期续）
+  Req1 跳过: 0, 1
+  Req2 跳过: 5, 1
+  Req3 跳过: 10, 1
+  Req4 跳过: 15, 1
+  Req5 跳过: 20, 1
+  Req6 写: 25, 1
+        </pre>
+        <p style="text-align:center;margin-top:4mm">
+          活跃会话写次数 <span class="bad">6→1</span>（约 -83%）
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Slide 10: 双拦截器 -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">双拦截器设计</h2><span class="slide-num">10 / 11</span>
+  </div>
+  <div class="slide-body">
+    <pre class="mermaid">
+flowchart TB
+  R[请求进入] --> I1{RefreshTokenInterceptor<br/>order=0, 拦截 /**}
+  I1 -->|有 token & 有效| W[ThreadLocal 存 user<br/>必要时滑窗续期]
+  I1 -->|无 token / 无效| P1[直接放行]
+  W --> I2{LoginInterceptor<br/>order=1, 排除公开路径}
+  P1 --> I2
+  I2 -->|公开路径| H[Handler]
+  I2 -->|受保护路径 & ThreadLocal 为空| X401[401]
+  I2 -->|受保护路径 & 已登录| H
+  H --> AC[afterCompletion: 清理 ThreadLocal]
+    </pre>
+    <div class="callout">
+      <strong>为什么拆两个？</strong>因为续期需要对<strong>所有请求</strong>生效（包括 /shop 这种不需要登录的查询，登录用户访问也希望续期），但拦登录态只能限定在<strong>受保护路径</strong>。一个拦截器同时承担两件事 → 排除规则会互相打架。
+    </div>
+  </div>
+</section>
+
+<!-- Slide 11: 总结 + 扩展 -->
+<section class="slide">
+  <div class="slide-header">
+    <h2 class="slide-title">总结 & 可继续扩展方向</h2><span class="slide-num">11 / 11</span>
+  </div>
+  <div class="slide-body">
+    <pre class="mermaid">
+mindmap
+  root((登录模块))
+    本次完成
+      安全层
+        60s 重发
+        日 10 次上限
+        SHA-256 哈希
+        5 错锁 10min
+        SmsClient 抽象
+      会话层
+        JSON 序列化
+        滑窗续期
+        参数全配置化
+    可扩展
+      多端登录控制
+        手机号→活跃 token Set
+        踢下线
+      审计
+        登录事件异步发布
+        Kafka / MQ 落库
+      认证形态
+        JWT + Refresh Token
+      数据保护
+        手机号加密列
+        脱敏返回
+    </pre>
+  </div>
+</section>
+
+</body>
+</html>
