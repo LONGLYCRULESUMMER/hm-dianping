@@ -1,0 +1,9 @@
+56a86b8 fix(login): address code-review findings
+d90278c style(login): restore CACHE_NULL_TTL whitespace per spec
+3384340 refactor(login): JSON-based session + sliding TTL refresh
+942e1f1 refactor(login): hash code, anti-abuse checks, JSON token storage
+9d2e23f feat(login): add LoginSecurityService for anti-abuse, hashing, lockout
+5bd1524 feat(login): add Redis key constants for anti-abuse and lock
+199a78a feat(login): introduce SmsClient abstraction with log-based default
+8b62952 feat(login): add LoginProperties for centralized config
+b685ae6 chore: baseline before login module enterprise refactor
