@@ -6,7 +6,19 @@ public class RedisConstants {
     public static final String LOGIN_USER_KEY = "login:token:";
     public static final Long LOGIN_USER_TTL = 30L;
 
-    public static final Long CACHE_NULL_TTL = 2L;
+    /** 同手机号重发冷却 key 前缀（值无意义，靠存在性判断） */
+    public static final String LOGIN_CODE_COOLDOWN_KEY = "login:code:cooldown:";
+
+    /** 同手机号当日发送次数计数 key 前缀，TTL 24h */
+    public static final String LOGIN_CODE_COUNT_KEY = "login:code:count:";
+
+    /** 同手机号验证码错误次数计数 key 前缀 */
+    public static final String LOGIN_CODE_FAIL_KEY = "login:code:fail:";
+
+    /** 同手机号锁定 key 前缀 */
+    public static final String LOGIN_CODE_LOCK_KEY = "login:code:lock:";
+
+    public static final Long CACHE_NULL_TTL= 2L;
 
     public static final Long CACHE_SHOP_TTL = 30L;
     public static final String CACHE_SHOP_KEY = "cache:shop:";
