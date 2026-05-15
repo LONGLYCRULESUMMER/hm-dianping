@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(nginx -c /Users/javagod/VsCodeProjects/hm-dianping/nginx-1.18.0/conf/nginx.conf)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080)",
+      "Bash(nginx -s stop)",
+      "Bash(nginx -p /Users/javagod/VsCodeProjects/hm-dianping/nginx-1.18.0 -c conf/nginx.conf)"
+    ]
+  }
+}
