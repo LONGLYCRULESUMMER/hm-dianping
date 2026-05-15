@@ -1,0 +1,127 @@
+@page {
+  size: A4 landscape;
+  margin: 0;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: "PingFang SC", "Source Han Sans CN", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+  color: #e6edf3;
+  background: #0d1117;
+}
+
+.slide {
+  width: 297mm;
+  height: 210mm;
+  padding: 18mm 22mm;
+  page-break-after: always;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+  position: relative;
+  overflow: hidden;
+}
+
+.slide:last-child { page-break-after: auto; }
+
+.slide-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 2px solid #30363d;
+  padding-bottom: 8mm;
+  margin-bottom: 10mm;
+}
+
+.slide-title {
+  font-size: 28pt;
+  font-weight: 700;
+  color: #58a6ff;
+  margin: 0;
+}
+
+.slide-num {
+  font-size: 12pt;
+  color: #6e7681;
+}
+
+.slide-body {
+  flex: 1;
+  font-size: 14pt;
+  line-height: 1.7;
+}
+
+.cover {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.cover h1 { font-size: 48pt; color: #58a6ff; margin: 0 0 6mm; }
+.cover h2 { font-size: 22pt; color: #c9d1d9; font-weight: 400; margin: 0 0 14mm; }
+.cover .badges span {
+  display: inline-block;
+  background: #21262d;
+  color: #79c0ff;
+  padding: 4px 12px;
+  margin: 4px;
+  border-radius: 14px;
+  font-size: 11pt;
+}
+
+ul, ol { padding-left: 1.2em; }
+li { margin-bottom: 6px; }
+
+.bad { color: #f85149; }
+.good { color: #3fb950; }
+.accent { color: #d2a8ff; }
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12pt;
+}
+th, td {
+  border: 1px solid #30363d;
+  padding: 6px 10px;
+  text-align: left;
+}
+th { background: #161b22; color: #58a6ff; }
+
+pre {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 10pt;
+  overflow: hidden;
+  color: #e6edf3;
+}
+code { font-family: "JetBrains Mono", "SF Mono", Menlo, monospace; }
+
+.diff-add { color: #3fb950; }
+.diff-del { color: #f85149; }
+
+.mermaid {
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  justify-content: center;
+}
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12mm;
+}
+
+.callout {
+  border-left: 4px solid #d2a8ff;
+  padding: 6px 12px;
+  background: #161b22;
+  margin: 8mm 0;
+  font-size: 13pt;
+}

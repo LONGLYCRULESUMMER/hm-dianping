@@ -1,0 +1,11 @@
+{
+  "name": "hmdp-login-deck",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "playwright": "^1.45.0"
+  }
+}
