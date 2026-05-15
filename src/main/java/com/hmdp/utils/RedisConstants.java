@@ -18,7 +18,7 @@ public class RedisConstants {
     /** 同手机号锁定 key 前缀 */
     public static final String LOGIN_CODE_LOCK_KEY = "login:code:lock:";
 
-    public static final Long CACHE_NULL_TTL= 2L;
+    public static final Long CACHE_NULL_TTL = 2L;
 
     public static final Long CACHE_SHOP_TTL = 30L;
     public static final String CACHE_SHOP_KEY = "cache:shop:";
