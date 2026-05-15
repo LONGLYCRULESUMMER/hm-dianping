@@ -20,6 +20,7 @@ const path = require('path');
     format: 'A4',
     landscape: true,
     printBackground: true,
+    pageRanges: '1-11',
     margin: { top: 0, right: 0, bottom: 0, left: 0 }
   });
 
