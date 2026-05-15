@@ -25,3 +25,14 @@ mybatis-plus:
 logging:
   level:
     com.hmdp: debug
+
+hmdp:
+  login:
+    code-ttl-seconds: 120
+    token-ttl-seconds: 1800
+    refresh-threshold-seconds: 600
+    resend-interval-seconds: 60
+    daily-send-limit: 10
+    fail-limit: 5
+    lock-seconds: 600
+    code-salt: "hmdp-login-default-salt-CHANGE-ME"
