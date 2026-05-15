@@ -1,46 +1,54 @@
 package com.hmdp.utils;
 
-import cn.hutool.core.bean.BeanUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.hmdp.config.LoginProperties;
 import com.hmdp.dto.UserDTO;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
-import static com.hmdp.utils.RedisConstants.LOGIN_USER_TTL;
 
 public class RefreshTokenInterceptor implements HandlerInterceptor {
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final ObjectMapper objectMapper;
+    private final LoginProperties props;
 
-    public RefreshTokenInterceptor(StringRedisTemplate stringRedisTemplate) {
+    public RefreshTokenInterceptor(StringRedisTemplate stringRedisTemplate,
+                                   ObjectMapper objectMapper,
+                                   LoginProperties props) {
         this.stringRedisTemplate = stringRedisTemplate;
+        this.objectMapper = objectMapper;
+        this.props = props;
     }
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
-        // 1. 获取请求头中的 token
         String token = request.getHeader("authorization");
         if (token == null || token.trim().isEmpty()) {
-            // 没有 token 直接放行，由 LoginInterceptor 决定是否需要登录
             return true;
         }
-        // 2. 从 Redis 获取用户信息
         String key = LOGIN_USER_KEY + token;
-        Map<Object, Object> userMap = stringRedisTemplate.opsForHash().entries(key);
-        if (userMap.isEmpty()) {
-            // token 无效，直接放行，由 LoginInterceptor 决定是否需要登录
+        String json = stringRedisTemplate.opsForValue().get(key);
+        if (json == null || json.isEmpty()) {
             return true;
         }
-        // 3. 将 map 转为 UserDTO 存入 ThreadLocal
-        UserDTO userDTO = BeanUtil.fillBeanWithMap(userMap, new UserDTO(), false);
+        UserDTO userDTO;
+        try {
+            userDTO = objectMapper.readValue(json, UserDTO.class);
+        } catch (Exception e) {
+            return true;
+        }
         UserHolder.saveUser(userDTO);
-        // 4. 刷新 token 有效期
-        stringRedisTemplate.expire(key, LOGIN_USER_TTL, TimeUnit.MINUTES);
+
+        Long ttl = stringRedisTemplate.getExpire(key, TimeUnit.SECONDS);
+        if (ttl != null && ttl > 0 && ttl < props.getRefreshThresholdSeconds()) {
+            stringRedisTemplate.expire(key, props.getTokenTtlSeconds(), TimeUnit.SECONDS);
+        }
         return true;
     }
 
