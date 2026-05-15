@@ -3,6 +3,7 @@ package com.hmdp.utils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hmdp.config.LoginProperties;
 import com.hmdp.dto.UserDTO;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.HandlerInterceptor;
 
@@ -12,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.utils.RedisConstants.LOGIN_USER_KEY;
 
+@Slf4j
 public class RefreshTokenInterceptor implements HandlerInterceptor {
 
     private final StringRedisTemplate stringRedisTemplate;
@@ -41,6 +43,8 @@ public class RefreshTokenInterceptor implements HandlerInterceptor {
         try {
             userDTO = objectMapper.readValue(json, UserDTO.class);
         } catch (Exception e) {
+            // 反序列化失败可能是数据被破坏或 UserDTO 结构演进；放行让 LoginInterceptor 兜底，但留下日志便于排查
+            log.warn("failed to deserialize login token, key={}, err={}", key, e.getMessage());
             return true;
         }
         UserHolder.saveUser(userDTO);

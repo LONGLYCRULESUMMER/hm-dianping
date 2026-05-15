@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import javax.annotation.PostConstruct;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -21,8 +22,18 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class LoginSecurityService {
 
+    private static final String DEFAULT_INSECURE_SALT = "hmdp-login-default-salt-CHANGE-ME";
+
     private final StringRedisTemplate redis;
     private final LoginProperties props;
+
+    @PostConstruct
+    void warnIfUsingDefaultSalt() {
+        if (DEFAULT_INSECURE_SALT.equals(props.getCodeSalt())) {
+            log.warn("[SECURITY] hmdp.login.code-salt is using the built-in default value. " +
+                    "Set a unique value via configuration before deploying to production.");
+        }
+    }
 
     public boolean inResendCooldown(String phone) {
         return Boolean.TRUE.equals(
@@ -51,10 +62,10 @@ public class LoginSecurityService {
 
     public void incrementDailyCount(String phone) {
         String key = RedisConstants.LOGIN_CODE_COUNT_KEY + phone;
-        Long v = redis.opsForValue().increment(key);
-        if (v != null && v == 1L) {
-            redis.expire(key, 24, TimeUnit.HOURS);
-        }
+        // 先用 SETNX + EX 原子性地"如果 key 不存在则创建并带 24h TTL"，
+        // 再 INCR；这样无论是否存在崩溃窗口，TTL 都已经先于计数被设置好。
+        redis.opsForValue().setIfAbsent(key, "0", 24, TimeUnit.HOURS);
+        redis.opsForValue().increment(key);
     }
 
     public void storeCode(String phone, String rawCode) {
@@ -90,10 +101,10 @@ public class LoginSecurityService {
 
     private void registerFailure(String phone) {
         String failKey = RedisConstants.LOGIN_CODE_FAIL_KEY + phone;
+        // 同样的原子化 TTL 模式：先 SETNX 占位带 TTL，再 INCR
+        redis.opsForValue().setIfAbsent(failKey, "0",
+                props.getCodeTtlSeconds() + 60, TimeUnit.SECONDS);
         Long count = redis.opsForValue().increment(failKey);
-        if (count != null && count == 1L) {
-            redis.expire(failKey, props.getCodeTtlSeconds() + 60, TimeUnit.SECONDS);
-        }
         if (count != null && count >= props.getFailLimit()) {
             redis.opsForValue().set(
                     RedisConstants.LOGIN_CODE_LOCK_KEY + phone,
