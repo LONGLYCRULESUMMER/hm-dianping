@@ -65,6 +65,11 @@
             <artifactId>hutool-all</artifactId>
             <version>5.8.26</version>
         </dependency>
+        <!--Kafka-->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
         <!--Redisson-->
         <dependency>
             <groupId>org.redisson</groupId>
