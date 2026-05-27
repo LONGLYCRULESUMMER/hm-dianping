@@ -1,8 +1,10 @@
 package com.hmdp.service.impl;
 
+import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.github.benmanes.caffeine.cache.Cache;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
@@ -20,15 +22,9 @@ import static com.hmdp.utils.RedisConstants.BLOOM_SHOP_KEY;
 import static com.hmdp.utils.RedisConstants.CACHE_NULL_TTL;
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TTL;
+import static com.hmdp.utils.RedisConstants.LOCK_SHOP_KEY;
+import static com.hmdp.utils.RedisConstants.LOCK_SHOP_TTL;
 
-/**
- * <p>
- *  服务实现类
- * </p>
- *
- * @author 虎哥
- * @since 2021-12-22
- */
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
@@ -37,6 +33,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Resource
     private RedisBloomFilter redisBloomFilter;
+
+    @Resource
+    private Cache<Long, Shop> shopLocalCache;
 
     @PostConstruct
     private void initShopBloomFilter() {
@@ -47,26 +46,62 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     }
 
     @Override
-    public Result queryById(Long id){
+    public Result queryById(Long id) {
+        // 一级缓存：Caffeine 本地缓存
+        Shop localShop = shopLocalCache.getIfPresent(id);
+        if (localShop != null) {
+            return Result.ok(localShop);
+        }
+
+        // 二级缓存：Redis
         String shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
-        if(StrUtil.isNotBlank(shopJson)){
+        if (StrUtil.isNotBlank(shopJson)) {
             Shop shop = JSONUtil.toBean(shopJson, Shop.class);
+            shopLocalCache.put(id, shop);
             return Result.ok(shop);
         }
         if (shopJson != null) {
             return Result.fail("Not Exist!");
         }
 
+        // 布隆过滤器拦截
         if (!redisBloomFilter.mightContain(BLOOM_SHOP_KEY, id.toString())) {
             return Result.fail("Not Exist!");
         }
 
-        Shop shop = getById(id);
-        if(shop != null){
-            stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id, JSONUtil.toJsonStr(shop), CACHE_SHOP_TTL, TimeUnit.MINUTES);
-            return Result.ok(shop);
+        // 互斥锁防击穿：只让一个线程回源数据库
+        String lockKey = LOCK_SHOP_KEY + id;
+        Shop shop = null;
+        try {
+            boolean locked = tryLock(lockKey);
+            if (!locked) {
+                Thread.sleep(50);
+                return queryById(id);
+            }
+            // 双重检查：拿到锁后再查一次缓存，可能其他线程已经写入了
+            shopJson = stringRedisTemplate.opsForValue().get(CACHE_SHOP_KEY + id);
+            if (StrUtil.isNotBlank(shopJson)) {
+                shop = JSONUtil.toBean(shopJson, Shop.class);
+                shopLocalCache.put(id, shop);
+                return Result.ok(shop);
+            }
+
+            shop = getById(id);
+            if (shop != null) {
+                // TTL 随机化防雪崩：30 + 0~5 分钟
+                long ttl = CACHE_SHOP_TTL + RandomUtil.randomInt(0, 5);
+                stringRedisTemplate.opsForValue().set(
+                        CACHE_SHOP_KEY + id, JSONUtil.toJsonStr(shop), ttl, TimeUnit.MINUTES);
+                shopLocalCache.put(id, shop);
+                return Result.ok(shop);
+            }
+            stringRedisTemplate.opsForValue().set(
+                    CACHE_SHOP_KEY + id, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } finally {
+            unlock(lockKey);
         }
-        stringRedisTemplate.opsForValue().set(CACHE_SHOP_KEY + id, "", CACHE_NULL_TTL, TimeUnit.MINUTES);
         return Result.fail("Not Exist!");
     }
 
@@ -84,7 +119,18 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         }
         updateById(shop);
         stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
+        shopLocalCache.invalidate(shop.getId());
         redisBloomFilter.add(BLOOM_SHOP_KEY, shop.getId().toString());
         return Result.ok();
+    }
+
+    private boolean tryLock(String key) {
+        Boolean flag = stringRedisTemplate.opsForValue()
+                .setIfAbsent(key, "1", LOCK_SHOP_TTL, TimeUnit.SECONDS);
+        return Boolean.TRUE.equals(flag);
+    }
+
+    private void unlock(String key) {
+        stringRedisTemplate.delete(key);
     }
 }

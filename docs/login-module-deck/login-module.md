@@ -483,9 +483,17 @@ mindmap
         滑块 / 图形验证码前置
 ```
 
-### 一句话收尾
+# Key Points
 
-**这次改造没引入任何新中间件，仅靠"参数化 + 抽象 + 原子化"就把登录模块从 toy 推到了"中小企业可上生产"的水准。** 后续每一项扩展（多端控制、审计、JWT）都可以独立迭代，互不阻塞，因为我们已经把会话和安全这两块的接口边界画清楚了。
+7. ### JWT vs Redis Token
+
+   黑马: Token是一个无意义的UUID, 用户信息存在 Redis里.
+
+   JWT: Token本身包含用户信息, 服务端不存任何东西.
+
+   ​	JWT token: Header算法信息; Payload用户信息,base64明文; Signaature签名
+
+   JWT原理: 服务端有一个密钥, 签发时 Signature = HMAC-SHA256; 验证时用同样的方法重算一遍, 和token里的signature对比, 一致就读取用户信息, 不一致就拒绝. 验证过程完全在本地, 不需要Redis和数据库.
 
 ---
 

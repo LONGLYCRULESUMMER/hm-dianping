@@ -38,3 +38,6 @@ build/
 *.local
 docs/login-module-deck/node_modules/
 docs/login-module-deck/package-lock.json
+
+### Nginx ###
+nginx-1.18.0/
