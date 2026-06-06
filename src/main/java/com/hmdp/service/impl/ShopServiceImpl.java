@@ -5,26 +5,34 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.github.benmanes.caffeine.cache.Cache;
+import com.hmdp.dto.RedisData;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.RedisBloomFilter;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static com.hmdp.utils.RedisConstants.BLOOM_SHOP_KEY;
 import static com.hmdp.utils.RedisConstants.CACHE_NULL_TTL;
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_KEY;
+import static com.hmdp.utils.RedisConstants.CACHE_SHOP_LOGICAL_KEY;
+import static com.hmdp.utils.RedisConstants.CACHE_SHOP_LOGICAL_TTL;
 import static com.hmdp.utils.RedisConstants.CACHE_SHOP_TTL;
 import static com.hmdp.utils.RedisConstants.LOCK_SHOP_KEY;
 import static com.hmdp.utils.RedisConstants.LOCK_SHOP_TTL;
 
+@Slf4j
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
@@ -36,6 +44,8 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Resource
     private Cache<Long, Shop> shopLocalCache;
+
+    private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
 
     @PostConstruct
     private void initShopBloomFilter() {
@@ -103,6 +113,73 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             unlock(lockKey);
         }
         return Result.fail("Not Exist!");
+    }
+
+    /**
+     * 逻辑过期方案查询商铺（缓存击穿备选方案）。
+     * 缓存永不真正过期，通过 expireTime 字段判断是否逻辑过期。
+     * 过期时开新线程异步重建缓存，当前请求返回旧数据，保证高可用。
+     */
+    public Result queryByIdWithLogicalExpiry(Long id) {
+        // 一级缓存：Caffeine
+        Shop localShop = shopLocalCache.getIfPresent(id);
+        if (localShop != null) {
+            return Result.ok(localShop);
+        }
+
+        // 二级缓存：Redis（逻辑过期 key）
+        String json = stringRedisTemplate.opsForValue().get(CACHE_SHOP_LOGICAL_KEY + id);
+        if (StrUtil.isBlank(json)) {
+            // 逻辑过期方案要求热点数据预热，未命中说明不是热点数据
+            return Result.fail("Not Exist!");
+        }
+
+        // 反序列化
+        RedisData redisData = JSONUtil.toBean(json, RedisData.class);
+        Shop shop = JSONUtil.toBean((cn.hutool.json.JSONObject) redisData.getData(), Shop.class);
+        LocalDateTime expireTime = redisData.getExpireTime();
+
+        // 未逻辑过期 → 直接返回
+        if (expireTime.isAfter(LocalDateTime.now())) {
+            shopLocalCache.put(id, shop);
+            return Result.ok(shop);
+        }
+
+        // 已逻辑过期 → 尝试获取互斥锁，异步重建缓存
+        String lockKey = LOCK_SHOP_KEY + id;
+        boolean locked = tryLock(lockKey);
+        if (locked) {
+            // 拿到锁，开新线程异步重建
+            CACHE_REBUILD_EXECUTOR.submit(() -> {
+                try {
+                    saveShopToRedisWithLogicalExpiry(id, CACHE_SHOP_LOGICAL_TTL);
+                } catch (Exception e) {
+                    log.error("缓存重建失败, shopId={}", id, e);
+                } finally {
+                    unlock(lockKey);
+                }
+            });
+        }
+        // 无论是否拿到锁，都返回旧数据（高可用）
+        shopLocalCache.put(id, shop);
+        return Result.ok(shop);
+    }
+
+    /**
+     * 将商铺数据以逻辑过期方式写入 Redis（用于预热和重建）。
+     */
+    public void saveShopToRedisWithLogicalExpiry(Long id, Long expireMinutes) {
+        Shop shop = getById(id);
+        if (shop == null) {
+            return;
+        }
+        RedisData redisData = new RedisData();
+        redisData.setData(shop);
+        redisData.setExpireTime(LocalDateTime.now().plusMinutes(expireMinutes));
+        // 不设 TTL → 缓存永不真正过期
+        stringRedisTemplate.opsForValue().set(
+                CACHE_SHOP_LOGICAL_KEY + id, JSONUtil.toJsonStr(redisData));
+        shopLocalCache.put(id, shop);
     }
 
     @Override
