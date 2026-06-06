@@ -5,6 +5,7 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.github.benmanes.caffeine.cache.Cache;
+import com.hmdp.config.KafkaConfig;
 import com.hmdp.dto.RedisData;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
@@ -13,6 +14,7 @@ import com.hmdp.service.IShopService;
 import com.hmdp.utils.RedisBloomFilter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.PostConstruct;
@@ -44,6 +46,9 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Resource
     private Cache<Long, Shop> shopLocalCache;
+
+    @Resource
+    private KafkaTemplate<String, String> kafkaTemplate;
 
     private static final ExecutorService CACHE_REBUILD_EXECUTOR = Executors.newFixedThreadPool(10);
 
@@ -194,9 +199,15 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         if (shop.getId() == null) {
             return Result.fail("店铺 id 不能为空");
         }
+        // 1. 更新数据库
         updateById(shop);
+        // 2. 删除 Redis 缓存（Cache Aside）
         stringRedisTemplate.delete(CACHE_SHOP_KEY + shop.getId());
+        // 3. 失效本机 Caffeine
         shopLocalCache.invalidate(shop.getId());
+        // 4. 广播 Kafka → 其他节点的 Caffeine 也失效
+        kafkaTemplate.send(KafkaConfig.CACHE_INVALIDATION_TOPIC, shop.getId().toString());
+        // 5. 布隆过滤器更新
         redisBloomFilter.add(BLOOM_SHOP_KEY, shop.getId().toString());
         return Result.ok();
     }
